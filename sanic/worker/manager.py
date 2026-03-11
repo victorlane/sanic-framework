@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-import pickle
+import pickle  # nosec B403
 import signal
 
 from collections.abc import Iterable, MutableMapping

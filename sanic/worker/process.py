@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-import pickle
+import pickle  # nosec B403
 
 from collections.abc import MutableMapping
 from datetime import datetime, timezone
