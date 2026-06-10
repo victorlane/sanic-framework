@@ -9,6 +9,15 @@ from sanic.log import error_logger
 from sanic.utils import str_to_bool
 
 
+# Python 3.14 deprecates the asyncio policy API (slated for removal in
+# Python 3.16). Match only the policy-related messages so other
+# DeprecationWarnings raised from asyncio are not hidden.
+_POLICY_DEPRECATION_MESSAGE = (
+    r"'asyncio\.((get|set)_event_loop_policy|\w*EventLoopPolicy)'"
+    r" is deprecated"
+)
+
+
 def try_use_uvloop() -> None:
     """Use uvloop instead of the default asyncio loop."""
     if OS_IS_WINDOWS:
@@ -48,7 +57,9 @@ def try_use_uvloop() -> None:
     with warnings.catch_warnings():
         if sys.version_info >= (3, 14):
             warnings.filterwarnings(
-                "ignore", category=DeprecationWarning, module="asyncio"
+                "ignore",
+                category=DeprecationWarning,
+                message=_POLICY_DEPRECATION_MESSAGE,
             )
         if not isinstance(
             asyncio.get_event_loop_policy(), uvloop.EventLoopPolicy
@@ -70,7 +81,9 @@ def try_windows_loop():
     with warnings.catch_warnings():
         if sys.version_info >= (3, 14):
             warnings.filterwarnings(
-                "ignore", category=DeprecationWarning, module="asyncio"
+                "ignore",
+                category=DeprecationWarning,
+                message=_POLICY_DEPRECATION_MESSAGE,
             )
         if not isinstance(
             asyncio.get_event_loop_policy(),
