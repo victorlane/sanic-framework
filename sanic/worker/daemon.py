@@ -13,10 +13,16 @@ from pathlib import Path
 from sanic.compat import OS_IS_WINDOWS
 from sanic.log import logger
 
-if not OS_IS_WINDOWS:
-    import grp
-    import pwd
 
+try:
+    import grp  # type: ignore
+except (ImportError, ModuleNotFoundError):  # pragma: no cover
+    grp = None  # type: ignore
+
+try:
+    import pwd  # type: ignore
+except (ImportError, ModuleNotFoundError):  # pragma: no cover
+    pwd = None  # type: ignore
 
 try:
     import fcntl  # type: ignore
