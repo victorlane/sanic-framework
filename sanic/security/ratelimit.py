@@ -21,6 +21,7 @@ from __future__ import annotations
 import time
 
 from abc import ABC, abstractmethod
+from functools import wraps
 from typing import TYPE_CHECKING, Awaitable, Callable
 
 from sanic.exceptions import TooManyRequests
@@ -207,6 +208,11 @@ def ratelimit(
     identify_fn = identify
 
     def decorator(handler: Callable[..., Awaitable]) -> Callable:
+        # functools.wraps sets __wrapped__ so inspect.signature() resolves to
+        # the handler's real signature. This lets sanic-ext (and anything else
+        # that introspects the handler) still see injected parameters such as
+        # DI-provided services when @ratelimit is stacked with them.
+        @wraps(handler)
         async def wrapper(request: Request, *args, **kwargs):
             active_backend = backend
             if active_backend is None:
@@ -219,9 +225,6 @@ def ratelimit(
             await active_backend.persist(bucket)
             return await handler(request, *args, **kwargs)
 
-        wrapper.__name__ = getattr(handler, "__name__", "wrapper")
-        wrapper.__doc__ = handler.__doc__
-        wrapper.__wrapped__ = handler
         return wrapper
 
     return decorator
