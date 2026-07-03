@@ -788,6 +788,92 @@ class RouteMixin(BaseMixin, metaclass=SanicMeta):
             **ctx_kwargs,
         )(handler)
 
+    def mount(
+        self,
+        prefix: str,
+        asgi_app: Callable[..., Any],
+        *,
+        name: str | None = None,
+    ) -> None:
+        """Mount an external ASGI application under a path prefix.
+
+        This lets a Sanic application embed any ASGI app (Starlette,
+        FastAPI, etc.) so that requests to ``{prefix}/...`` are forwarded to
+        the sub-application. A catch-all route is registered at
+        ``{prefix}/<path:path>`` (and the bare ``prefix``) whose handler
+        bridges the incoming Sanic request to a minimal ASGI HTTP scope and
+        drives ``asgi_app(scope, receive, send)``.
+
+        Phase 1 limitations:
+
+        * The request body is read in full and delivered in a single
+          ``http.request`` event; streaming request bodies is a follow-up.
+        * No sub-app websocket support and no lifespan forwarding. Only the
+          public :class:`~sanic.request.Request` API is used, so the same
+          handler works whether Sanic runs under its own server or under an
+          external ASGI server.
+
+        Args:
+            prefix (str): Path prefix to mount the sub-application under.
+                Any trailing slash is stripped; ``"/"`` mounts at the root.
+            asgi_app (Callable): The ASGI 3.0 application to embed. It must be
+                a callable of the form ``async def app(scope, receive, send)``.
+            name (Optional[str]): Base route name; defaults to a name derived
+                from the prefix.
+
+        Examples:
+            ```python
+            from sanic import Sanic
+
+            app = Sanic("test")
+
+            async def sub_app(scope, receive, send):
+                await send({
+                    "type": "http.response.start",
+                    "status": 200,
+                    "headers": [(b"content-type", b"text/plain")],
+                })
+                await send({
+                    "type": "http.response.body",
+                    "body": b"Hello from ASGI",
+                })
+
+            app.mount("/sub", sub_app)
+            ```
+        """
+        from sanic.mixins.asgi_mount import (
+            _normalize_prefix,
+            create_asgi_mount_handler,
+        )
+
+        normalized = _normalize_prefix(prefix)
+        handler = create_asgi_mount_handler(asgi_app, normalized)
+
+        if name is None:
+            slug = normalized.strip("/").replace("/", "_") or "root"
+            name = f"asgi_mount_{slug}"
+
+        methods = list(HTTP_METHODS)
+
+        # Catch-all for any sub-path under the prefix.
+        self.add_route(
+            handler,
+            f"{normalized}/<path:path>",
+            methods=methods,
+            name=f"{name}_path",
+            stream=True,
+        )
+        # The bare prefix itself (e.g. a request to exactly ``/sub``). When
+        # mounting at the root this is ``/`` which the catch-all above does
+        # not cover.
+        self.add_route(
+            handler,
+            normalized or "/",
+            methods=methods,
+            name=name,
+            stream=True,
+        )
+
     def _determine_error_format(self, handler) -> str:
         with suppress(OSError, TypeError):
             src = dedent(getsource(handler))
