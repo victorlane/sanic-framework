@@ -8,6 +8,7 @@ import pytest
 
 from websockets.frames import CTRL_OPCODES, DATA_OPCODES, OP_TEXT, Frame
 
+from sanic import Request, Sanic, Websocket
 from sanic.exceptions import ServerError
 from sanic.server.websockets.frame import WebsocketFrameAssembler
 from sanic.server.websockets.impl import WebsocketImplProtocol
@@ -327,3 +328,53 @@ RECV_CANCEL_CASES = (
 async def test_ws_recv_cancel_awaits_assembler_task(cancel_fn):
     """Cancelling recv() should clean up the assembler task."""
     await _assert_recv_awaits_assembler_on_cancel(cancel_fn)
+
+
+def test_ws_compression_enabled(app: Sanic):
+    app.config.WEBSOCKET_COMPRESSION = True
+
+    @app.websocket("/ws")
+    async def ws_echo_handler(request: Request, ws: Websocket):
+        while True:
+            msg = await ws.recv()
+            await ws.send(msg)
+
+    negotiated = []
+
+    async def client_mimic(ws):
+        negotiated.append(
+            ws.response_headers.get("Sec-WebSocket-Extensions", "")
+        )
+        await ws.send("round trip")
+        await ws.recv()
+
+    _, ws_proxy = app.test_client.websocket(
+        "/ws", mimic=client_mimic, compression="deflate"
+    )
+    assert "permessage-deflate" in negotiated[0]
+    assert ws_proxy.client_received == ["round trip"]
+
+
+def test_ws_compression_disabled_by_default(app: Sanic):
+    @app.websocket("/ws")
+    async def ws_echo_handler(request: Request, ws: Websocket):
+        while True:
+            msg = await ws.recv()
+            await ws.send(msg)
+
+    negotiated = []
+
+    async def client_mimic(ws):
+        negotiated.append(
+            ws.response_headers.get("Sec-WebSocket-Extensions", "")
+        )
+        await ws.send("round trip")
+        await ws.recv()
+
+    # The client offers permessage-deflate, but the server must not
+    # negotiate it unless WEBSOCKET_COMPRESSION is enabled
+    _, ws_proxy = app.test_client.websocket(
+        "/ws", mimic=client_mimic, compression="deflate"
+    )
+    assert "permessage-deflate" not in negotiated[0]
+    assert ws_proxy.client_received == ["round trip"]

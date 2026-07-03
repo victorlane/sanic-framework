@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ssl import SSLContext
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sanic.config import Config
 from sanic.exceptions import ServerError
@@ -394,11 +394,13 @@ def _serve_http_3(
 
 def _build_protocol_kwargs(
     protocol: type[asyncio.Protocol], config: Config
-) -> dict[str, int | float]:
+) -> dict[str, Any]:
     if hasattr(protocol, "websocket_handshake"):
         return {
             "websocket_max_size": config.WEBSOCKET_MAX_SIZE,
             "websocket_ping_timeout": config.WEBSOCKET_PING_TIMEOUT,
             "websocket_ping_interval": config.WEBSOCKET_PING_INTERVAL,
+            "websocket_compression": config.WEBSOCKET_COMPRESSION,
+            "websocket_origins": config.WEBSOCKET_ORIGINS,
         }
     return {}

@@ -67,7 +67,9 @@ DEFAULT_CONFIG = {
     "TLS_CERT_PASSWORD": "",  # nosec B105
     "TOUCHUP": _default,
     "USE_UVLOOP": _default,
+    "WEBSOCKET_COMPRESSION": False,
     "WEBSOCKET_MAX_SIZE": 2**20,  # 1 MiB
+    "WEBSOCKET_ORIGINS": None,
     "WEBSOCKET_PING_INTERVAL": 20,
     "WEBSOCKET_PING_TIMEOUT": 20,
 }
@@ -173,7 +175,9 @@ class Config(dict, metaclass=DescriptorMeta):
     TLS_CERT_PASSWORD: str
     TOUCHUP: Default | bool
     USE_UVLOOP: Default | bool
+    WEBSOCKET_COMPRESSION: bool
     WEBSOCKET_MAX_SIZE: int
+    WEBSOCKET_ORIGINS: Sequence[str] | None
     WEBSOCKET_PING_INTERVAL: int
     WEBSOCKET_PING_TIMEOUT: int
 

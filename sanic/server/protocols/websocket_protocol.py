@@ -11,7 +11,10 @@ except ImportError:  # websockets < 11.0
 
 from websockets import http11
 from websockets.datastructures import Headers as WSHeaders
-from websockets.typing import Subprotocol
+from websockets.extensions.permessage_deflate import (
+    ServerPerMessageDeflateFactory,
+)
+from websockets.typing import Origin, Subprotocol
 
 from sanic.exceptions import SanicException
 from sanic.log import access_logger, websockets_logger
@@ -33,6 +36,8 @@ class WebSocketProtocol(HttpProtocol):
         "websocket_max_size",
         "websocket_ping_interval",
         "websocket_ping_timeout",
+        "websocket_compression",
+        "websocket_origins",
         "websocket_url",
         "websocket_peer",
     )
@@ -44,6 +49,8 @@ class WebSocketProtocol(HttpProtocol):
         websocket_max_size: int | None = None,
         websocket_ping_interval: float | None = 20.0,
         websocket_ping_timeout: float | None = 20.0,
+        websocket_compression: bool = False,
+        websocket_origins: Sequence[str] | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -52,6 +59,8 @@ class WebSocketProtocol(HttpProtocol):
         self.websocket_max_size = websocket_max_size
         self.websocket_ping_interval = websocket_ping_interval
         self.websocket_ping_timeout = websocket_ping_timeout
+        self.websocket_compression = websocket_compression
+        self.websocket_origins = websocket_origins
         self.websocket_url: str | None = None
         self.websocket_peer: str | None = None
 
@@ -112,6 +121,10 @@ class WebSocketProtocol(HttpProtocol):
         self, request, subprotocols: Sequence[str] | None = None
     ):
         # let the websockets package do the handshake with the client
+        # Note: origin validation and compression negotiation below only
+        # apply when Sanic runs its own server. In ASGI mode this protocol
+        # is bypassed entirely, so enforcing Origin checks there is the
+        # responsibility of the ASGI server (or app middleware).
         try:
             if subprotocols is not None:
                 # subprotocols can be a set or frozenset,
@@ -125,9 +138,23 @@ class WebSocketProtocol(HttpProtocol):
                         ]
                     ),
                 )
+            extensions = (
+                [ServerPerMessageDeflateFactory()]
+                if self.websocket_compression
+                else None
+            )
+            origins: Sequence[Origin] | None = None
+            if self.websocket_origins is not None:
+                # A literal "null" entry matches clients that send
+                # `Origin: null` (e.g. sandboxed iframes, file:// pages)
+                origins = [
+                    Origin(origin) for origin in self.websocket_origins
+                ]
             ws_proto = ServerProtocol(
                 max_size=self.websocket_max_size,
                 subprotocols=subprotocols,
+                extensions=extensions,
+                origins=origins,
                 state=OPEN,
                 logger=websockets_logger,
             )
