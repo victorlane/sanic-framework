@@ -187,6 +187,7 @@ extras_require = {
     "docs": docs_require,
     "all": all_require,
     "ext": ["sanic-ext"],
+    "validate": ["sanic-ext"],
     "http3": ["aioquic"],
 }
 
