@@ -22,6 +22,9 @@ from sanic.response import HTTPResponse, file, file_stream, validate_file
 from sanic.response.convenience import guess_content_type
 
 
+DEFAULT_STREAM_LARGE_FILES_THRESHOLD = 1024 * 1024
+
+
 class StaticMixin(BaseMixin, metaclass=SanicMeta):
     def __init__(self, *args, **kwargs) -> None:
         self._future_statics: set[FutureStatic] = set()
@@ -36,7 +39,7 @@ class StaticMixin(BaseMixin, metaclass=SanicMeta):
         pattern: str = r"/?.+",
         use_modified_since: bool = True,
         use_content_range: bool = False,
-        stream_large_files: bool | int = False,
+        stream_large_files: bool | int = DEFAULT_STREAM_LARGE_FILES_THRESHOLD,
         name: str = "static",
         host: str | None = None,
         strict_slashes: bool | None = None,
@@ -65,12 +68,17 @@ class StaticMixin(BaseMixin, metaclass=SanicMeta):
             use_content_range (bool, optional): If true, process header for
                 range requests and sends  the file part that is requested.
                 Defaults to `False`.
-            stream_large_files (Union[bool, int], optional): If `True`, use
-                the `StreamingHTTPResponse.file_stream` handler rather than
-                the `HTTPResponse.file handler` to send the file. If this
-                is an integer, it represents the threshold size to switch
-                to `StreamingHTTPResponse.file_stream`. Defaults to `False`,
-                which means that the response will not be streamed.
+            stream_large_files (Union[bool, int], optional): If an integer,
+                it represents the threshold size (in bytes) at or above
+                which files are sent using the streaming `file_stream`
+                handler rather than being buffered in memory by the `file`
+                handler. If `True`, the default threshold of 1 MiB
+                (`DEFAULT_STREAM_LARGE_FILES_THRESHOLD`) is used. If
+                `False`, files are never streamed and are always buffered
+                fully in memory. Defaults to
+                `DEFAULT_STREAM_LARGE_FILES_THRESHOLD` (1 MiB), so files
+                of 1 MiB or larger are streamed by default; pass `False`
+                to restore the old buffer-everything behavior.
             name (str, optional): User-defined name used for url_for.
                 Defaults to `"static"`.
             host (Optional[str], optional): Host IP or FQDN for the
@@ -115,9 +123,15 @@ class StaticMixin(BaseMixin, metaclass=SanicMeta):
             app.static('/static', 'path/to/static/directory')
             ```
 
-            Serving large files with a specific threshold:
+            Serving large files with a specific threshold (files of 1 MiB
+            or larger are streamed by default):
             ```python
             app.static('/static', 'path/to/large/files', stream_large_files=1000000)
+            ```
+
+            Disabling streaming so files are always buffered in memory:
+            ```python
+            app.static('/static', 'path/to/static/directory', stream_large_files=False)
             ```
         """  # noqa: E501
 
@@ -334,18 +348,18 @@ class StaticHandleMixin(metaclass=SanicMeta):
             if request.method == "HEAD":
                 return HTTPResponse(headers=headers)
             else:
-                if stream_large_files:
+                # Ranged requests are always served through file() because
+                # file_stream() does not reliably honor range boundaries.
+                if stream_large_files and _range is None:
                     if isinstance(stream_large_files, bool):
-                        threshold = 1024 * 1024
+                        threshold = DEFAULT_STREAM_LARGE_FILES_THRESHOLD
                     else:
                         threshold = stream_large_files
 
                     if not stats:
                         stats = await stat_async(file_path)
                     if stats.st_size >= threshold:
-                        return await file_stream(
-                            file_path, headers=headers, _range=_range
-                        )
+                        return await file_stream(file_path, headers=headers)
                 return await file(file_path, headers=headers, _range=_range)
         except (IsADirectoryError, PermissionError):
             return await directory_handler.handle(request, request.path)
