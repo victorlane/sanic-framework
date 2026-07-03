@@ -177,3 +177,19 @@ async def test_ratelimit_custom_backend(clock):
     with pytest.raises(TooManyRequests):
         await handler(req)
     assert len(calls) == 1
+
+
+def test_ratelimit_preserves_handler_signature():
+    """@ratelimit must expose the wrapped handler's signature so that
+    signature-introspecting layers (e.g. sanic-ext dependency injection) still
+    see the handler's parameters."""
+    import inspect
+
+    async def handler(request, body, service):
+        return "ok"
+
+    wrapped = ratelimit(5, 60)(handler)
+    params = list(inspect.signature(wrapped).parameters)
+    assert params == ["request", "body", "service"]
+    assert wrapped.__name__ == "handler"
+    assert wrapped.__wrapped__ is handler
