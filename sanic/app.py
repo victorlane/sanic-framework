@@ -1878,48 +1878,86 @@ class Sanic(
             k: v for k, v in self._task_registry.items() if v is not None
         }
 
+    async def _await_cancelled_tasks(self, timeout: float) -> None:
+        """Cancel all tasks except the server task and await their cleanup.
+
+        Cancels every registered task (except the server task) and then
+        yields control back to the event loop so that the cancelled tasks
+        can run their cleanup (e.g. ``finally`` blocks), waiting at most
+        ``timeout`` seconds for them to complete.
+
+        Args:
+            timeout (float): The amount of time to wait for the cancelled
+                tasks to complete.
+        """
+        tasks = [task for task in self.tasks if task.get_name() != "RunServer"]
+        for task in tasks:
+            # Do not re-cancel tasks that already have a pending cancellation
+            # request, so their in-progress cleanup is not interrupted.
+            # Task.cancelling() is only available on Python 3.11+.
+            cancelling = getattr(task, "cancelling", None)
+            if cancelling is None or not cancelling():
+                task.cancel()
+
+        if tasks:
+            _, pending = await asyncio.wait(tasks, timeout=timeout)
+            if pending and timeout:
+                error_logger.warning(
+                    "Sanic gave up waiting for the following tasks to "
+                    "complete during shutdown: %s",
+                    ", ".join(task.get_name() for task in pending),
+                )
+        self.purge_tasks()
+
     def shutdown_tasks(
         self,
         timeout: float | None = None,
         increment: float = 0.1,
         loop: asyncio.AbstractEventLoop | None = None,
-    ) -> None:
+    ) -> Task[None] | None:
         """Cancel all tasks except the server task.
 
         This method is used to cancel all tasks except the server task. It
-        iterates through the task registry, cancelling all tasks except the
-        server task, and then waits for the tasks to complete. Optionally, you
-        can provide a timeout and an increment to control how long the method
-        will wait for the tasks to complete.
+        cancels all tasks except the server task, then waits for them to
+        complete so that their cleanup (e.g. ``finally`` blocks) actually
+        runs. Optionally, you can provide a timeout to control how long the
+        method will wait for the tasks to complete.
 
         Args:
-            timeout (Optional[float]): The amount of time to wait for the tasks
-                to complete. Defaults to `None`.
-            increment (float): The amount of time to wait between checks for
-                whether the tasks have completed. Defaults to `0.1`.
+            timeout (Optional[float]): The amount of time to wait for the
+                tasks to complete. Defaults to `None`.
+            increment (float): Unused. Retained for API compatibility.
             loop (Optional[asyncio.AbstractEventLoop]): The event loop to use
-                for waiting. If not provided, attempts to get the running loop.
-        """
-        for task in self.tasks:
-            if task.get_name() != "RunServer":
-                task.cancel()
+                for waiting when there is no running loop. If not provided,
+                the policy's event loop is used.
 
+        Returns:
+            Optional[Task]: If there is a running event loop, the task
+                performing the shutdown is returned so that async callers can
+                await it. Otherwise the shutdown is run to completion on the
+                event loop and ``None`` is returned.
+        """
         if timeout is None:
             timeout = self.config.GRACEFUL_SHUTDOWN_TIMEOUT
 
-        if loop is None:
-            try:
-                loop = get_running_loop()
-            except RuntimeError:
-                loop = asyncio.get_event_loop_policy().get_event_loop()
+        try:
+            running_loop = get_running_loop()
+        except RuntimeError:
+            running_loop = None
 
-        while self._task_registry and timeout > 0:
-            try:
-                loop.run_until_complete(asyncio.sleep(increment))
-            except RuntimeError:
-                pass
-            self.purge_tasks()
-            timeout -= increment
+        if running_loop is not None:
+            # A loop is already running, so it cannot be driven from here.
+            # Schedule the shutdown on it and hand the task back to the caller
+            # to await; this avoids the busy-loop that never yielded CPU to
+            # the cancelled tasks' cleanup.
+            return running_loop.create_task(
+                self._await_cancelled_tasks(timeout)
+            )
+
+        if loop is None:
+            loop = asyncio.get_event_loop_policy().get_event_loop()
+        loop.run_until_complete(self._await_cancelled_tasks(timeout))
+        return None
 
     @property
     def tasks(self) -> Iterable[Task[Any]]:
