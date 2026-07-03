@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from collections.abc import Iterable
+from hmac import compare_digest
 from typing import Any
 from urllib.parse import unquote
 
@@ -394,7 +395,10 @@ def parse_forwarded(headers, config) -> Options | None:
         key = key.lower()[::-1]
         val = (val_token or val_quoted.replace('"\\', '"'))[::-1]
         options_list.append((key, val))
-        if key in ("secret", "by") and val == secret:
+        if key in ("secret", "by") and compare_digest(
+            val.encode(errors="surrogateescape"),
+            secret.encode(errors="surrogateescape"),
+        ):
             found = True
         # Check if we would return on next round, to avoid useless parse
         if found and sep != ";":
@@ -546,6 +550,9 @@ def parse_credentials(
         prefixes = ("Basic", "Bearer", "Token")
     if header is not None:
         for prefix in prefixes:
-            if prefix in header:
-                return prefix, header.partition(prefix)[-1].strip()
+            p = str(prefix)
+            # Anchored, case-insensitive scheme match (RFC 7235) to avoid
+            # matching substrings like "NotBearer abc" as a Bearer token.
+            if header[: len(p) + 1].lower() == p.lower() + " ":
+                return p, header[len(p) + 1 :].strip()
     return None, header

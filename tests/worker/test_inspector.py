@@ -167,3 +167,41 @@ def test_run_inspector_authentication():
         "/", headers={"Authorization": "Bearer super-secret"}
     )
     assert response.status == 200
+
+
+@pytest.mark.parametrize(
+    "auth_header",
+    (
+        # missing header
+        None,
+        # scheme without a token
+        "Bearer",
+        # wrong key, same length
+        "Bearer super-secreX",
+        # wrong key, shorter than the API key
+        "Bearer nope",
+        # wrong key, longer than the API key
+        "Bearer super-secret-but-longer",
+        # correct key hidden behind an unknown scheme (anchored matching)
+        "NotBearer super-secret",
+    ),
+)
+def test_run_inspector_authentication_rejects_bad_token(auth_header):
+    inspector = Inspector(
+        Mock(), {}, {}, "", 0, "super-secret", Default(), Default()
+    )(False)
+    manager = TestManager(inspector.app)
+    headers = {"Authorization": auth_header} if auth_header else None
+    _, response = manager.test_client.get("/", headers=headers)
+    assert response.status == 401
+
+
+def test_run_inspector_authentication_case_insensitive_scheme():
+    inspector = Inspector(
+        Mock(), {}, {}, "", 0, "super-secret", Default(), Default()
+    )(False)
+    manager = TestManager(inspector.app)
+    _, response = manager.test_client.get(
+        "/", headers={"Authorization": "bearer super-secret"}
+    )
+    assert response.status == 200
