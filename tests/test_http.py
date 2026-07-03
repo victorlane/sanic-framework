@@ -142,6 +142,8 @@ def test_url_encoding(client):
         b"+50",
         b"5_0",
         b"50.5",
+        b"50 ",
+        b"50\t",
     ),
 )
 def test_invalid_content_length(content_length, client):
@@ -214,6 +216,100 @@ def test_smuggle(client):
     headers, body = response.rsplit(b"\r\n\r\n", 1)
     assert b"400 Bad Request" in headers
     assert b"Bad Request" in body
+
+
+def test_header_space_before_colon_rejected(client):
+    # RFC 9112 5.1: whitespace between the field name and colon MUST be
+    # rejected with a 400. A lenient parse would ignore the header and
+    # treat the body below as a pipelined request.
+    client.send(
+        b"POST /upload HTTP/1.1\r\n"
+        b"Host: localhost\r\n"
+        b"Content-Length : 26\r\n"
+        b"\r\n"
+        b"GET /smuggled HTTP/1.1\r\n"
+        b"\r\n"
+    )
+
+    response = client.recv()
+    assert response.count(b"HTTP/1.1") == 1
+    assert b"400 Bad Request" in response
+    assert b"200 OK" not in response
+
+
+def test_header_bare_lf_rejected(client):
+    # A bare LF inside a header line survives the \r\n\r\n split and must
+    # not be accepted as part of a header value.
+    client.send(
+        b"GET / HTTP/1.1\r\n"
+        b"Host: localhost\r\n"
+        b"X-Foo: bar\nContent-Length: 26\r\n"
+        b"\r\n"
+        b"GET /smuggled HTTP/1.1\r\n"
+        b"\r\n"
+    )
+
+    response = client.recv()
+    assert response.count(b"HTTP/1.1") == 1
+    assert b"400 Bad Request" in response
+    assert b"200 OK" not in response
+
+
+def test_header_bare_cr_rejected(client):
+    client.send(
+        b"GET / HTTP/1.1\r\n"
+        b"Host: localhost\r\n"
+        b"X-Foo: bar\rX-Bar: baz\r\n"
+        b"\r\n"
+    )
+
+    response = client.recv()
+    assert response.count(b"HTTP/1.1") == 1
+    assert b"400 Bad Request" in response
+    assert b"200 OK" not in response
+
+
+def test_header_obs_fold_rejected(client):
+    # Obsolete line folding (continuation lines) must not be accepted.
+    client.send(
+        b"GET / HTTP/1.1\r\n"
+        b"Host: localhost\r\n"
+        b"X-Foo: bar\r\n"
+        b" baz\r\n"
+        b"\r\n"
+    )
+
+    response = client.recv()
+    assert response.count(b"HTTP/1.1") == 1
+    assert b"400 Bad Request" in response
+    assert b"200 OK" not in response
+
+
+def test_invalid_method_rejected(client):
+    client.send(
+        b"GE\tT / HTTP/1.1\r\n"
+        b"Host: localhost\r\n"
+        b"\r\n"
+    )
+
+    response = client.recv()
+    assert response.count(b"HTTP/1.1") == 1
+    assert b"400 Bad Request" in response
+    assert b"200 OK" not in response
+
+
+def test_normal_headers_still_accepted(client):
+    client.send(
+        b"GET / HTTP/1.1\r\n"
+        b"Host: localhost\r\n"
+        b"X-Custom-Header:   spaced out value\r\n"
+        b"Accept: */*\r\n"
+        b"\r\n"
+    )
+
+    response = client.recv()
+    assert b"200 OK" in response
+    assert b"111122223333444455556666777788889999" in response
 
 
 def test_chunked_trailer_baseline(client):
