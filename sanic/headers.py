@@ -409,7 +409,8 @@ def parse_xforwarded(headers, config) -> Options | None:
     proxies_count = config.PROXIES_COUNT
     addr = real_ip_header and headers.getone(real_ip_header, None)
     if not addr and proxies_count:
-        assert proxies_count > 0
+        if proxies_count <= 0:
+            raise ValueError("PROXIES_COUNT must be a positive integer")
         try:
             # Combine, split and filter multiple headers' entries
             forwarded_for = headers.getall(config.FORWARDED_FOR_HEADER)
