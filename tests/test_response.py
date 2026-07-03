@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import inspect
 import os
 import time
@@ -25,7 +26,9 @@ from sanic.cookies import CookieJar
 from sanic.response import (
     HTTPResponse,
     ResponseStream,
+    ServerSentEvent,
     empty,
+    event_stream,
     file,
     file_stream,
     json,
@@ -1038,3 +1041,136 @@ def test_stream_response_with_default_headers(app: Sanic):
     assert response.text == "foo"
     assert response.headers["Transfer-Encoding"] == "chunked"
     assert response.headers["Content-Type"] == "text/csv"
+
+
+def test_server_sent_event_rendering():
+    assert str(ServerSentEvent("hello")) == "data: hello\n\n"
+    assert str(
+        ServerSentEvent("hello", event="greeting", id="1", retry=1000)
+    ) == ("event: greeting\nid: 1\nretry: 1000\ndata: hello\n\n")
+
+
+def test_server_sent_event_multiline_data():
+    assert str(ServerSentEvent("line one\nline two")) == (
+        "data: line one\ndata: line two\n\n"
+    )
+
+
+def test_event_stream_wire_format_and_headers(app: Sanic):
+    @app.route("/")
+    async def handler(request: Request):
+        async def events():
+            yield ServerSentEvent("first", event="greeting", id="1")
+            yield ServerSentEvent("second", retry=1000)
+            yield ServerSentEvent("third")
+
+        return event_stream(events(), ping=0)
+
+    _, response = app.test_client.get("/")
+    assert (
+        response.headers["Content-Type"] == "text/event-stream; charset=utf-8"
+    )
+    assert response.headers["Cache-Control"] == "no-cache"
+    assert response.headers["X-Accel-Buffering"] == "no"
+    assert response.text == (
+        "event: greeting\nid: 1\ndata: first\n\n"
+        "retry: 1000\ndata: second\n\n"
+        "data: third\n\n"
+    )
+
+
+def test_event_stream_str_and_dict_items(app: Sanic):
+    @app.route("/")
+    async def handler(request: Request):
+        async def events():
+            yield "plain"
+            yield {"foo": "bar"}
+
+        return event_stream(events(), ping=0)
+
+    _, response = app.test_client.get("/")
+    assert response.text == ('data: plain\n\ndata: {"foo":"bar"}\n\n')
+
+
+def test_event_stream_multiline_data(app: Sanic):
+    @app.route("/")
+    async def handler(request: Request):
+        async def events():
+            yield ServerSentEvent("line one\nline two")
+
+        return event_stream(events(), ping=0)
+
+    _, response = app.test_client.get("/")
+    assert response.text == "data: line one\ndata: line two\n\n"
+
+
+def test_event_stream_ping(app: Sanic):
+    @app.route("/")
+    async def handler(request: Request):
+        async def events():
+            yield ServerSentEvent("one")
+            await asyncio.sleep(0.2)
+            yield ServerSentEvent("two")
+
+        return event_stream(events(), ping=0.05)
+
+    _, response = app.test_client.get("/")
+    assert ": ping\n\n" in response.text
+    assert (
+        response.text.index("data: one")
+        < response.text.index(": ping")
+        < response.text.index("data: two")
+    )
+
+
+@pytest.mark.asyncio
+async def test_event_stream_disconnect_closes_generator():
+    cleanup_ran = False
+
+    async def events():
+        nonlocal cleanup_ran
+        try:
+            while True:
+                yield ServerSentEvent("tick")
+        finally:
+            cleanup_ran = True
+
+    stream = event_stream(events(), ping=0)
+
+    class DisconnectingResponse:
+        async def write(self, message: str):
+            raise asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        await stream.streaming_fn(DisconnectingResponse())
+
+    assert cleanup_ran is True
+
+
+@pytest.mark.asyncio
+async def test_event_stream_client_disconnect_runs_cleanup(app: Sanic):
+    app.ctx.cleanup_ran = False
+
+    @app.get("/")
+    async def handler(request: Request):
+        async def events():
+            try:
+                while True:
+                    yield ServerSentEvent("tick")
+                    await asyncio.sleep(0.1)
+            finally:
+                app.ctx.cleanup_ran = True
+
+        return event_stream(events(), ping=0)
+
+    loop = asyncio.get_event_loop()
+    task = loop.create_task(app.asgi_client.get("/"))
+    await asyncio.sleep(0.5)
+
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+    await asyncio.sleep(0.5)
+
+    assert app.ctx.cleanup_ran is True
