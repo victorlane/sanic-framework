@@ -17,7 +17,7 @@ from asyncio import (
 from asyncio.futures import Future
 from collections import defaultdict, deque
 from collections.abc import Awaitable, Coroutine, Iterable, Iterator
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from enum import Enum
 from functools import partial, wraps
 from inspect import isawaitable

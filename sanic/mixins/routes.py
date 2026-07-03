@@ -8,6 +8,7 @@ from textwrap import dedent
 from typing import (
     Any,
     Callable,
+    TypeVar,
     cast,
 )
 
@@ -18,12 +19,16 @@ from sanic.constants import HTTP_METHODS
 from sanic.errorpages import RESPONSE_MAPPING
 from sanic.mixins.base import BaseMixin
 from sanic.models.futures import FutureRoute, FutureStatic
-from sanic.models.handler_types import RouteHandler
 from sanic.types import HashableDict
 
 
+# The bound is deliberately loose (rather than ``RouteHandler``) so that
+# handlers returning any response type (e.g. ``ResponseStream``) do not
+# fail the bound check; the decorators exist to register the handler and
+# hand it back unchanged, preserving its exact signature.
+RouteHandlerT = TypeVar("RouteHandlerT", bound=Callable[..., Any])
 RouteWrapper = Callable[
-    [RouteHandler], RouteHandler | tuple[Route, RouteHandler]
+    [RouteHandlerT], RouteHandlerT | tuple[Route, RouteHandlerT]
 ]
 
 
@@ -53,7 +58,9 @@ class RouteMixin(BaseMixin, metaclass=SanicMeta):
         version_prefix: str = "/v",
         error_format: str | None = None,
         **ctx_kwargs: Any,
-    ) -> RouteWrapper:
+    ) -> Callable[
+        [RouteHandlerT], RouteHandlerT | tuple[Route, RouteHandlerT]
+    ]:
         """Decorate a function to be registered as a route.
 
         Args:
@@ -81,7 +88,9 @@ class RouteMixin(BaseMixin, metaclass=SanicMeta):
                 prefix will be appended to the route context (`route.ctx`).
 
         Returns:
-            RouteWrapper: Tuple of routes, decorated function.
+            The decorator function, which registers the route and returns
+                the handler unchanged (or a tuple of the route and handler
+                for static routes).
 
         Examples:
             Using the method to define a GET endpoint:
@@ -212,7 +221,7 @@ class RouteMixin(BaseMixin, metaclass=SanicMeta):
 
     def add_route(
         self,
-        handler: RouteHandler,
+        handler: RouteHandlerT,
         uri: str,
         methods: Iterable[str] = frozenset({"GET"}),
         host: str | list[str] | None = None,
@@ -224,7 +233,7 @@ class RouteMixin(BaseMixin, metaclass=SanicMeta):
         error_format: str | None = None,
         unquote: bool = False,
         **ctx_kwargs: Any,
-    ) -> RouteHandler:
+    ) -> RouteHandlerT:
         """A helper method to register class-based view or functions as a handler to the application url routes.
 
         Args:
@@ -317,7 +326,7 @@ class RouteMixin(BaseMixin, metaclass=SanicMeta):
         version_prefix: str = "/v",
         error_format: str | None = None,
         **ctx_kwargs: Any,
-    ) -> RouteHandler:
+    ) -> Callable[[RouteHandlerT], RouteHandlerT]:
         """Decorate a function handler to create a route definition using the **GET** HTTP method.
 
         Args:
@@ -341,10 +350,11 @@ class RouteMixin(BaseMixin, metaclass=SanicMeta):
                 context (`route.ctx`).
 
         Returns:
-            RouteHandler: Object decorated with route method.
+            The decorator function, which registers the handler and
+                returns it unchanged (preserving its signature).
         """  # noqa: E501
         return cast(
-            RouteHandler,
+            Callable[[RouteHandlerT], RouteHandlerT],
             self.route(
                 uri,
                 methods=frozenset({"GET"}),
@@ -370,7 +380,7 @@ class RouteMixin(BaseMixin, metaclass=SanicMeta):
         version_prefix: str = "/v",
         error_format: str | None = None,
         **ctx_kwargs: Any,
-    ) -> RouteHandler:
+    ) -> Callable[[RouteHandlerT], RouteHandlerT]:
         """Decorate a function handler to create a route definition using the **POST** HTTP method.
 
         Args:
@@ -392,10 +402,11 @@ class RouteMixin(BaseMixin, metaclass=SanicMeta):
                 context (`route.ctx`).
 
         Returns:
-            RouteHandler: Object decorated with route method.
+            The decorator function, which registers the handler and
+                returns it unchanged (preserving its signature).
         """  # noqa: E501
         return cast(
-            RouteHandler,
+            Callable[[RouteHandlerT], RouteHandlerT],
             self.route(
                 uri,
                 methods=frozenset({"POST"}),
@@ -421,7 +432,7 @@ class RouteMixin(BaseMixin, metaclass=SanicMeta):
         version_prefix: str = "/v",
         error_format: str | None = None,
         **ctx_kwargs: Any,
-    ) -> RouteHandler:
+    ) -> Callable[[RouteHandlerT], RouteHandlerT]:
         """Decorate a function handler to create a route definition using the **PUT** HTTP method.
 
         Args:
@@ -443,10 +454,11 @@ class RouteMixin(BaseMixin, metaclass=SanicMeta):
                 context (`route.ctx`).
 
         Returns:
-            RouteHandler: Object decorated with route method.
+            The decorator function, which registers the handler and
+                returns it unchanged (preserving its signature).
         """  # noqa: E501
         return cast(
-            RouteHandler,
+            Callable[[RouteHandlerT], RouteHandlerT],
             self.route(
                 uri,
                 methods=frozenset({"PUT"}),
@@ -472,7 +484,7 @@ class RouteMixin(BaseMixin, metaclass=SanicMeta):
         version_prefix: str = "/v",
         error_format: str | None = None,
         **ctx_kwargs: Any,
-    ) -> RouteHandler:
+    ) -> Callable[[RouteHandlerT], RouteHandlerT]:
         """Decorate a function handler to create a route definition using the **HEAD** HTTP method.
 
         Args:
@@ -496,10 +508,11 @@ class RouteMixin(BaseMixin, metaclass=SanicMeta):
                 context (`route.ctx`).
 
         Returns:
-            RouteHandler: Object decorated with route method.
+            The decorator function, which registers the handler and
+                returns it unchanged (preserving its signature).
         """  # noqa: E501
         return cast(
-            RouteHandler,
+            Callable[[RouteHandlerT], RouteHandlerT],
             self.route(
                 uri,
                 methods=frozenset({"HEAD"}),
@@ -525,7 +538,7 @@ class RouteMixin(BaseMixin, metaclass=SanicMeta):
         version_prefix: str = "/v",
         error_format: str | None = None,
         **ctx_kwargs: Any,
-    ) -> RouteHandler:
+    ) -> Callable[[RouteHandlerT], RouteHandlerT]:
         """Decorate a function handler to create a route definition using the **OPTIONS** HTTP method.
 
         Args:
@@ -549,10 +562,11 @@ class RouteMixin(BaseMixin, metaclass=SanicMeta):
                 context (`route.ctx`).
 
         Returns:
-            RouteHandler: Object decorated with route method.
+            The decorator function, which registers the handler and
+                returns it unchanged (preserving its signature).
         """  # noqa: E501
         return cast(
-            RouteHandler,
+            Callable[[RouteHandlerT], RouteHandlerT],
             self.route(
                 uri,
                 methods=frozenset({"OPTIONS"}),
@@ -578,7 +592,7 @@ class RouteMixin(BaseMixin, metaclass=SanicMeta):
         version_prefix: str = "/v",
         error_format: str | None = None,
         **ctx_kwargs: Any,
-    ) -> RouteHandler:
+    ) -> Callable[[RouteHandlerT], RouteHandlerT]:
         """Decorate a function handler to create a route definition using the **PATCH** HTTP method.
 
         Args:
@@ -600,10 +614,11 @@ class RouteMixin(BaseMixin, metaclass=SanicMeta):
                 context (`route.ctx`).
 
         Returns:
-            RouteHandler: Object decorated with route method.
+            The decorator function, which registers the handler and
+                returns it unchanged (preserving its signature).
         """  # noqa: E501
         return cast(
-            RouteHandler,
+            Callable[[RouteHandlerT], RouteHandlerT],
             self.route(
                 uri,
                 methods=frozenset({"PATCH"}),
@@ -629,7 +644,7 @@ class RouteMixin(BaseMixin, metaclass=SanicMeta):
         version_prefix: str = "/v",
         error_format: str | None = None,
         **ctx_kwargs: Any,
-    ) -> RouteHandler:
+    ) -> Callable[[RouteHandlerT], RouteHandlerT]:
         """Decorate a function handler to create a route definition using the **DELETE** HTTP method.
 
         Args:
@@ -650,10 +665,11 @@ class RouteMixin(BaseMixin, metaclass=SanicMeta):
                 prefix will be appended to the route context (`route.ctx`).
 
         Returns:
-            RouteHandler: Object decorated with route method.
+            The decorator function, which registers the handler and
+                returns it unchanged (preserving its signature).
         """  # noqa: E501
         return cast(
-            RouteHandler,
+            Callable[[RouteHandlerT], RouteHandlerT],
             self.route(
                 uri,
                 methods=frozenset({"DELETE"}),
@@ -680,7 +696,7 @@ class RouteMixin(BaseMixin, metaclass=SanicMeta):
         version_prefix: str = "/v",
         error_format: str | None = None,
         **ctx_kwargs: Any,
-    ):
+    ) -> Callable[[RouteHandlerT], RouteHandlerT]:
         """Decorate a function to be registered as a websocket route.
 
         Args:
@@ -704,21 +720,25 @@ class RouteMixin(BaseMixin, metaclass=SanicMeta):
                 context (`route.ctx`).
 
         Returns:
-            tuple: Tuple of routes, decorated function.
+            The decorator function, which registers the handler and
+                returns it unchanged (preserving its signature).
         """
-        return self.route(
-            uri=uri,
-            host=host,
-            methods=None,
-            strict_slashes=strict_slashes,
-            version=version,
-            name=name,
-            apply=apply,
-            subprotocols=subprotocols,
-            websocket=True,
-            version_prefix=version_prefix,
-            error_format=error_format,
-            **ctx_kwargs,
+        return cast(
+            Callable[[RouteHandlerT], RouteHandlerT],
+            self.route(
+                uri=uri,
+                host=host,
+                methods=None,
+                strict_slashes=strict_slashes,
+                version=version,
+                name=name,
+                apply=apply,
+                subprotocols=subprotocols,
+                websocket=True,
+                version_prefix=version_prefix,
+                error_format=error_format,
+                **ctx_kwargs,
+            ),
         )
 
     def add_websocket_route(
