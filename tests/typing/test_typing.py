@@ -1,8 +1,10 @@
 # flake8: noqa: E501
 
 import subprocess
+import sys
 
 from pathlib import Path
+from shutil import which
 from tempfile import TemporaryDirectory
 
 import pytest
@@ -14,11 +16,15 @@ CURRENT_DIR = Path(__file__).parent
 def run_check(path_location: str) -> str:
     """Use mypy to check the given path location and return the output."""
 
-    mypy_path = "mypy"
+    if which("mypy"):
+        mypy_command = ["mypy"]
+    else:
+        # Fall back to the mypy installed in the running interpreter
+        mypy_command = [sys.executable, "-m", "mypy"]
     path = CURRENT_DIR / path_location
     with TemporaryDirectory() as cache_dir:
         command = [
-            mypy_path,
+            *mypy_command,
             "--cache-dir",
             cache_dir,
             path.resolve().as_posix(),
@@ -95,6 +101,19 @@ def run_check(path_location: str) -> str:
                 (
                     "sanic.app.Sanic[request_fully_custom.CustomConfig, request_fully_custom.Foo]",
                     34,
+                ),
+            ],
+        ),
+        (
+            "decorated_handlers.py",
+            [
+                (
+                    "def (request: sanic.request.types.Request[sanic.app.Sanic[sanic.config.Config, types.SimpleNamespace], types.SimpleNamespace]) -> typing.Coroutine[Any, Any, sanic.response.types.HTTPResponse]",
+                    13,
+                ),
+                (
+                    "def (request: sanic.request.types.Request[sanic.app.Sanic[sanic.config.Config, types.SimpleNamespace], types.SimpleNamespace], ws: Any) -> typing.Coroutine[Any, Any, None]",
+                    21,
                 ),
             ],
         ),

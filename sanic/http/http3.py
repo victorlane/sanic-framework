@@ -154,11 +154,11 @@ class HTTPReceiver(Receiver, Stream):
                 f"Message body set in response on {self.request.path}. "
                 f"A {status} response may only have headers, no body."
             )
-        elif "content-length" not in headers:
-            if size:
-                headers["content-length"] = size
-            else:
-                headers["transfer-encoding"] = "chunked"
+        elif "content-length" not in headers and size:
+            # HTTP/3 does not use transfer-encoding (RFC 9114 section 4.2);
+            # framing is provided by QUIC streams, so when the size is
+            # unknown neither content-length nor transfer-encoding is sent.
+            headers["content-length"] = size
 
         headers = [
             (b":status", str(response.status).encode()),
@@ -232,21 +232,9 @@ class HTTPReceiver(Receiver, Stream):
         if self.stage is not Stage.RESPONSE:
             raise ServerError(f"not ready to send: {self.stage}")
 
-        # Chunked
-        if (
-            self.response
-            and self.response.headers.get("transfer-encoding") == "chunked"
-        ):
-            size = len(data)
-            if end_stream:
-                data = (
-                    b"%x\r\n%b\r\n0\r\n\r\n" % (size, data)
-                    if size
-                    else b"0\r\n\r\n"
-                )
-            elif size:
-                data = b"%x\r\n%b\r\n" % (size, data)
-
+        # HTTP/3 does not use HTTP/1.1-style chunk framing; QUIC streams
+        # provide framing, so the payload is passed through unchanged and
+        # end_stream=True terminates the stream (even with an empty payload).
         logger.debug(  # no cov
             f"{Colors.BLUE}[transmitting]{Colors.END}",
             extra={"verbosity": 2},

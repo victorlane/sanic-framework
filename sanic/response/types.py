@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Coroutine, Iterator
+from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, AnyStr, Callable, TypeVar
 
@@ -479,6 +480,41 @@ class JSONResponse(HTTPResponse):
         self.raw_body = self._raw_body
 
         return value
+
+
+@dataclass
+class ServerSentEvent:
+    """A single event to be sent over a Server-Sent Events stream.
+
+    Renders per the WHATWG Server-Sent Events specification: optional
+    `event:`, `id:`, and `retry:` fields, followed by one or more
+    `data:` lines (multi-line data is split into repeated `data:`
+    lines), terminated by a blank line.
+
+    See [Server-sent events](https://html.spec.whatwg.org/multipage/server-sent-events.html)
+
+    Args:
+        data (str): The event payload. Multi-line strings are rendered as repeated `data:` lines.
+        event (Optional[str], optional): The event type. Defaults to `None`.
+        id (Optional[str], optional): The event ID used by the client to resume. Defaults to `None`.
+        retry (Optional[int], optional): Reconnection time, in milliseconds. Defaults to `None`.
+    """  # noqa: E501
+
+    data: str
+    event: str | None = None
+    id: str | None = None
+    retry: int | None = None
+
+    def __str__(self) -> str:
+        lines = []
+        if self.event is not None:
+            lines.append(f"event: {self.event}")
+        if self.id is not None:
+            lines.append(f"id: {self.id}")
+        if self.retry is not None:
+            lines.append(f"retry: {self.retry}")
+        lines.extend(f"data: {part}" for part in self.data.split("\n"))
+        return "\n".join(lines) + "\n\n"
 
 
 class ResponseStream:

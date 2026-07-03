@@ -1,6 +1,9 @@
 import asyncio
+import logging
+import sys
 
 from asyncio.tasks import Task
+from contextlib import suppress
 from unittest.mock import Mock, call
 
 import pytest
@@ -108,6 +111,133 @@ def test_shutdown_tasks_on_app_stop():
         call(timeout=0),
         call(15.0),
     ]
+
+
+async def test_shutdown_tasks_allows_cancelled_task_cleanup(app: Sanic):
+    cleanup_done = False
+
+    async def with_cleanup():
+        nonlocal cleanup_done
+        try:
+            await asyncio.sleep(10)
+        finally:
+            await asyncio.sleep(0.2)
+            cleanup_done = True
+
+    app.add_task(with_cleanup(), name="cleanup_task")
+    await asyncio.sleep(0.05)
+
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    shutdown = app.shutdown_tasks(timeout=5)
+
+    assert shutdown is not None
+    await shutdown
+
+    assert cleanup_done is True
+    assert loop.time() - start < 5
+    assert len(app._task_registry) == 0
+
+
+async def test_shutdown_tasks_warns_about_uncompleted_tasks(
+    app: Sanic, caplog
+):
+    allow_cancel = False
+
+    async def stubborn():
+        while True:
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                if allow_cancel:
+                    raise
+
+    task = app.add_task(stubborn(), name="stubborn_task")
+    await asyncio.sleep(0.05)
+
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    with caplog.at_level(logging.WARNING, logger="sanic.error"):
+        shutdown = app.shutdown_tasks(timeout=0.3)
+        assert shutdown is not None
+        await shutdown
+
+    assert loop.time() - start < 5
+    assert any(
+        record.levelno == logging.WARNING
+        and "stubborn_task" in record.getMessage()
+        for record in caplog.records
+    )
+
+    # Let the task actually terminate to avoid dangling task warnings
+    allow_cancel = True
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 11),
+    reason="Task.cancelling() requires Python 3.11+",
+)
+async def test_shutdown_tasks_twice_does_not_interrupt_cleanup(app: Sanic):
+    # Mimics the server shutdown path, where app.stop() calls
+    # shutdown_tasks(timeout=0) and the server cleanup later calls
+    # shutdown_tasks() again with the graceful timeout. The second
+    # call must not re-cancel tasks that are running their cleanup.
+    cleanup_done = False
+
+    async def with_cleanup():
+        nonlocal cleanup_done
+        try:
+            await asyncio.sleep(10)
+        finally:
+            await asyncio.sleep(0.2)
+            cleanup_done = True
+
+    app.add_task(with_cleanup(), name="cleanup_task")
+    await asyncio.sleep(0.05)
+
+    first = app.shutdown_tasks(timeout=0)
+    assert first is not None
+    await first
+    # Give the cancelled task a chance to enter its cleanup
+    await asyncio.sleep(0.05)
+
+    second = app.shutdown_tasks(timeout=5)
+    assert second is not None
+    await second
+
+    assert cleanup_done is True
+    assert len(app._task_registry) == 0
+
+
+def test_shutdown_tasks_no_running_loop(app: Sanic):
+    cleanup_done = False
+
+    async def with_cleanup():
+        nonlocal cleanup_done
+        try:
+            await asyncio.sleep(10)
+        finally:
+            await asyncio.sleep(0.1)
+            cleanup_done = True
+
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        task = loop.create_task(with_cleanup(), name="cleanup_task")
+        app._task_registry["cleanup_task"] = task
+        loop.run_until_complete(asyncio.sleep(0.05))
+
+        ret = app.shutdown_tasks(timeout=5)
+
+        assert ret is None
+        assert cleanup_done is True
+        assert len(app._task_registry) == 0
+    finally:
+        asyncio.set_event_loop(None)
+        loop.close()
 
 
 async def test_task_result_is_preserved(app: Sanic):

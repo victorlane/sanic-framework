@@ -173,3 +173,65 @@ def test_ws_signals_exception(
     )
     assert ws_proxy.client_received == ["before: test 1", "exception: test 2"]
     assert app.ctx.seq == ["before", "wserror", "exception"]
+
+
+def test_ws_origin_allowed(
+    app: Sanic,
+    simple_ws_mimic_client: MimicClientType,
+):
+    app.config.WEBSOCKET_ORIGINS = ["http://allowed.example"]
+
+    @app.websocket("/ws")
+    async def ws_echo_handler(request: Request, ws: Websocket):
+        while True:
+            msg = await ws.recv()
+            await ws.send(msg)
+
+    _, ws_proxy = app.test_client.websocket(
+        "/ws",
+        mimic=simple_ws_mimic_client,
+        origin="http://allowed.example",
+    )
+    assert ws_proxy.client_sent == ["test 1", "test 2", ""]
+    assert ws_proxy.client_received == ["test 1", "test 2"]
+
+
+def test_ws_origin_mismatch_rejected(app: Sanic):
+    app.config.WEBSOCKET_ORIGINS = ["http://allowed.example"]
+
+    @app.websocket("/ws")
+    async def ws_echo_handler(request: Request, ws: Websocket):
+        while True:
+            msg = await ws.recv()
+            await ws.send(msg)
+
+    async def client_mimic(ws: WebSocketClientProtocol):
+        await ws.send("should never get here")
+
+    with pytest.raises(ValueError, match="403"):
+        app.test_client.websocket(
+            "/ws",
+            mimic=client_mimic,
+            origin="http://evil.example",
+        )
+
+
+def test_ws_origin_unset_allows_any(
+    app: Sanic,
+    simple_ws_mimic_client: MimicClientType,
+):
+    # Backwards compatibility: without WEBSOCKET_ORIGINS configured,
+    # any (or no) Origin header is accepted
+    @app.websocket("/ws")
+    async def ws_echo_handler(request: Request, ws: Websocket):
+        while True:
+            msg = await ws.recv()
+            await ws.send(msg)
+
+    _, ws_proxy = app.test_client.websocket(
+        "/ws",
+        mimic=simple_ws_mimic_client,
+        origin="http://evil.example",
+    )
+    assert ws_proxy.client_sent == ["test 1", "test 2", ""]
+    assert ws_proxy.client_received == ["test 1", "test 2"]

@@ -1,4 +1,4 @@
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 
@@ -15,7 +15,7 @@ from sanic.exceptions import BadRequest, PayloadTooLarge
 from sanic.http.constants import Stage
 from sanic.http.http3 import Http3, HTTPReceiver
 from sanic.models.server_types import ConnInfo
-from sanic.response import empty, json
+from sanic.response import HTTPResponse, empty, json
 from sanic.server.protocols.http_protocol import Http3Protocol
 
 
@@ -211,6 +211,66 @@ async def test_send_headers(app: Sanic, http_request: Request):
             (b"content-type", b"application/json"),
         ],
     )
+
+
+def generate_streaming_receiver(app, http_request) -> HTTPReceiver:
+    receiver = generate_http_receiver(app, http_request)
+    receiver.protocol.quic_event_received(
+        ProtocolNegotiated(alpn_protocol="h3")
+    )
+    http_request._protocol = receiver.protocol
+    receiver.protocol.connection.send_headers = Mock()
+    receiver.protocol.connection.send_data = Mock()
+    receiver.transmit = Mock()
+    receiver.head_only = False
+    # A response without a body, as used for streaming (unknown length)
+    receiver.response = HTTPResponse(status=200, content_type="text/plain")
+    return receiver
+
+
+async def test_send_headers_unknown_length_no_transfer_encoding(
+    app: Sanic, http_request: Request
+):
+    receiver = generate_streaming_receiver(app, http_request)
+
+    receiver.send_headers()
+
+    send_headers_mock = receiver.protocol.connection.send_headers
+    send_headers_mock.assert_called_once()
+    headers = send_headers_mock.call_args.kwargs["headers"]
+    header_names = [name for name, _ in headers]
+    assert b"transfer-encoding" not in header_names
+    assert b"content-length" not in header_names
+
+
+async def test_send_data_no_chunk_framing(app: Sanic, http_request: Request):
+    receiver = generate_streaming_receiver(app, http_request)
+
+    await receiver.send(b"foo,", False)
+    await receiver.send(b"bar", True)
+
+    send_data_mock = receiver.protocol.connection.send_data
+    assert send_data_mock.call_args_list == [
+        call(stream_id=0, data=b"foo,", end_stream=False),
+        call(stream_id=0, data=b"bar", end_stream=True),
+    ]
+    assert receiver.stage is Stage.IDLE
+
+
+async def test_send_empty_final_data_ends_stream(
+    app: Sanic, http_request: Request
+):
+    receiver = generate_streaming_receiver(app, http_request)
+
+    await receiver.send(b"partial", False)
+    await receiver.send(b"", True)
+
+    send_data_mock = receiver.protocol.connection.send_data
+    assert send_data_mock.call_args_list == [
+        call(stream_id=0, data=b"partial", end_stream=False),
+        call(stream_id=0, data=b"", end_stream=True),
+    ]
+    assert receiver.stage is Stage.IDLE
 
 
 async def test_multiple_streams(app):

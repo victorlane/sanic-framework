@@ -467,3 +467,60 @@ def test_multiple_fields_accessor(app: Sanic):
         "/", headers=(("Example-Field", "Foo, Bar"), ("Example-Field", "Baz"))
     )
     assert response.json["field"] == "Foo, Bar,Baz"
+
+
+@pytest.mark.parametrize(
+    "auth_header,prefixes,expected_prefix,expected_credentials",
+    (
+        ("Bearer abc", None, "Bearer", "abc"),
+        # Scheme matching is case-insensitive (RFC 7235)
+        ("bearer abc", None, "Bearer", "abc"),
+        ("BEARER abc", None, "Bearer", "abc"),
+        ("Token xyz", None, "Token", "xyz"),
+        ("Basic dXNlcjpwYXNz", None, "Basic", "dXNlcjpwYXNz"),
+        # Anchored matching: substrings must not match as a scheme
+        ("NotBearer abc", None, None, "NotBearer abc"),
+        ("XBasic dXNlcjpwYXNz", None, None, "XBasic dXNlcjpwYXNz"),
+        # A scheme without a trailing space is not a match
+        ("Bearer", None, None, "Bearer"),
+        ("Bearer ", None, "Bearer", ""),
+        # Custom prefixes are also anchored
+        ("Bearer abc", ("Token",), None, "Bearer abc"),
+        ("Token abc", ("Token",), "Token", "abc"),
+    ),
+)
+def test_parse_credentials_anchored_scheme(
+    auth_header, prefixes, expected_prefix, expected_credentials
+):
+    prefix, credentials = headers.parse_credentials(auth_header, prefixes)
+    assert prefix == expected_prefix
+    assert credentials == expected_credentials
+
+
+def test_parse_credentials_missing_header():
+    assert headers.parse_credentials(None) == (None, None)
+
+
+@pytest.mark.parametrize(
+    "forwarded,expected",
+    (
+        (
+            "for=1.2.3.4;secret=mySecret",
+            {"for": "1.2.3.4", "secret": "mySecret"},
+        ),
+        # The secret must match exactly, not merely as a substring
+        ("for=1.2.3.4;secret=mySecretX", None),
+        ("for=1.2.3.4;secret=XmySecret", None),
+        # Non-ASCII values must not raise, only fail to match
+        ('for=1.2.3.4;secret="mySecret✗"', None),
+        # Surrogate-escaped bytes (as produced by the header decoder for
+        # non-UTF-8 input) must not raise UnicodeEncodeError, only fail
+        ('for=1.2.3.4;secret="\udcff\udcfe"', None),
+    ),
+)
+def test_parse_forwarded_secret_exact_match(forwarded, expected):
+    class Config:
+        FORWARDED_SECRET = "mySecret"
+
+    request = make_request({"forwarded": forwarded})
+    assert headers.parse_forwarded(request.headers, Config) == expected

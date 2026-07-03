@@ -464,6 +464,102 @@ def test_static_stream_large_file(
     assert response.body == get_file_content(static_file_directory, file_name)
 
 
+def _spy_static_senders(monkeypatch):
+    """Wrap the file() and file_stream() functions used by the static
+    handler to count which sending path is taken."""
+    from sanic.mixins import static as static_module
+
+    calls = Counter()
+    real_file = static_module.file
+    real_file_stream = static_module.file_stream
+
+    async def spy_file(*args, **kwargs):
+        calls["file"] += 1
+        return await real_file(*args, **kwargs)
+
+    async def spy_file_stream(*args, **kwargs):
+        calls["file_stream"] += 1
+        return await real_file_stream(*args, **kwargs)
+
+    monkeypatch.setattr(static_module, "file", spy_file)
+    monkeypatch.setattr(static_module, "file_stream", spy_file_stream)
+    return calls
+
+
+def test_static_large_file_streams_by_default(
+    app, static_file_directory, large_file, monkeypatch
+):
+    calls = _spy_static_senders(monkeypatch)
+
+    app.static("/testing.file", large_file)
+
+    request, response = app.test_client.get("/testing.file")
+
+    assert response.status == 200
+    assert response.body == get_file_content(
+        static_file_directory, "large.file"
+    )
+    assert calls["file_stream"] >= 1
+    assert calls["file"] == 0
+
+
+def test_static_small_file_buffered_by_default(
+    app, static_file_directory, monkeypatch
+):
+    calls = _spy_static_senders(monkeypatch)
+
+    app.static(
+        "/testing.file", get_file_path(static_file_directory, "test.file")
+    )
+
+    request, response = app.test_client.get("/testing.file")
+
+    assert response.status == 200
+    assert response.body == get_file_content(
+        static_file_directory, "test.file"
+    )
+    assert calls["file"] >= 1
+    assert calls["file_stream"] == 0
+
+
+def test_static_stream_large_files_false_buffers_large_file(
+    app, static_file_directory, large_file, monkeypatch
+):
+    calls = _spy_static_senders(monkeypatch)
+
+    app.static("/testing.file", large_file, stream_large_files=False)
+
+    request, response = app.test_client.get("/testing.file")
+
+    assert response.status == 200
+    assert response.body == get_file_content(
+        static_file_directory, "large.file"
+    )
+    assert calls["file"] >= 1
+    assert calls["file_stream"] == 0
+
+
+def test_static_content_range_large_file_default_streaming(
+    app, static_file_directory, large_file, monkeypatch
+):
+    calls = _spy_static_senders(monkeypatch)
+
+    app.static("/testing.file", large_file, use_content_range=True)
+
+    headers = {"Range": "bytes=12-19"}
+    request, response = app.test_client.get("/testing.file", headers=headers)
+
+    assert response.status == 206
+    static_content = bytes(
+        get_file_content(static_file_directory, "large.file")
+    )[12:20]
+    assert int(response.headers["Content-Length"]) == len(static_content)
+    assert response.body == static_content
+    # Ranged requests are served through file(), not file_stream()
+    assert calls["file"] >= 1
+    assert calls["file_stream"] == 0
+
+
 @pytest.mark.parametrize(
     "file_name", ["test.file", "decode me.txt", "python.png"]
 )

@@ -426,6 +426,45 @@ def test_token(app, auth_type, token):
 
 
 @pytest.mark.parametrize(
+    ("auth_header", "expected_token"),
+    [
+        # Standard Bearer token
+        ("Bearer some-token", "some-token"),
+        # Scheme matching is case-insensitive (RFC 7235)
+        ("bearer some-token", "some-token"),
+        ("TOKEN some-token", "some-token"),
+        # Anchored matching: an unknown scheme containing a known scheme as
+        # a substring must not be parsed as that scheme; the raw header is
+        # the fallback
+        ("NotBearer some-token", "NotBearer some-token"),
+        # A scheme without a trailing space is not a scheme match
+        ("Bearer", "Bearer"),
+    ],
+)
+def test_token_scheme_matching(app, auth_header, expected_token):
+    @app.route("/")
+    async def handler(request):
+        return text("OK")
+
+    request, response = app.test_client.get(
+        "/", headers={"Authorization": auth_header}
+    )
+    assert request.token == expected_token
+
+
+def test_credentials_anchored_scheme_fallback(app):
+    @app.route("/")
+    async def handler(request):
+        return text("OK")
+
+    request, response = app.test_client.get(
+        "/", headers={"Authorization": "NotBearer some-token"}
+    )
+    assert request.credentials.auth_type is None
+    assert request.credentials.token == "NotBearer some-token"
+
+
+@pytest.mark.parametrize(
     ("auth_type", "token", "username", "password"),
     [
         # uuid4 generated token set in "Authorization" header

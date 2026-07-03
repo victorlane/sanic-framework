@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+
+from collections.abc import AsyncIterator
+from contextlib import suppress
 from datetime import datetime, timezone
 from email.utils import formatdate, parsedate_to_datetime
 from mimetypes import guess_type
@@ -11,11 +15,16 @@ from urllib.parse import quote_plus
 
 from sanic.compat import Header, open_async, stat_async
 from sanic.constants import DEFAULT_HTTP_CONTENT_TYPE
-from sanic.helpers import Default, _default
+from sanic.helpers import Default, _default, json_dumps
 from sanic.log import logger
 from sanic.models.protocol_types import HTMLProtocol, Range
 
-from .types import HTTPResponse, JSONResponse, ResponseStream
+from .types import (
+    HTTPResponse,
+    JSONResponse,
+    ResponseStream,
+    ServerSentEvent,
+)
 
 
 def empty(
@@ -396,6 +405,107 @@ async def file_stream(
         status=status,
         headers=headers,
         content_type=mime_type,
+    )
+
+
+def _render_sse(item: Any) -> str:
+    if isinstance(item, ServerSentEvent):
+        return str(item)
+    if isinstance(item, str):
+        return str(ServerSentEvent(item))
+    if isinstance(item, dict):
+        return str(ServerSentEvent(json_dumps(item)))
+    raise TypeError(
+        "Cannot send object of type "
+        f"{type(item).__name__} over an event stream. Expected "
+        "ServerSentEvent, str, or dict."
+    )
+
+
+def event_stream(
+    generator: AsyncIterator[Any],
+    *,
+    ping: float | None = 15.0,
+    headers: dict[str, str] | None = None,
+    status: int = 200,
+) -> ResponseStream:
+    """Return a streaming response object for Server-Sent Events.
+
+    The generator may yield `ServerSentEvent` objects (rendered per the
+    WHATWG spec), plain `str` objects (sent as a bare `data:` event), or
+    `dict` objects (JSON-encoded into a `data:` event).
+
+    While waiting on the generator, a `: ping` comment is written every
+    `ping` seconds to keep the connection alive. Pass `ping=0` (or
+    `None`) to disable keepalives.
+
+    If the client disconnects, the generator is closed so that any
+    cleanup (e.g. a `finally` block) runs.
+
+    Args:
+        generator (AsyncIterator[Any]): The generator producing events.
+        ping (Optional[float], optional): Seconds between keepalive comments. Defaults to `15.0`.
+        headers (Optional[Dict[str, str]], optional): Custom HTTP headers. Defaults to `None`.
+        status (int, optional): HTTP response code. Defaults to `200`.
+
+    Returns:
+        ResponseStream: A streaming response object.
+
+    Examples:
+        ```python
+        @app.get("/events")
+        async def handler(request: Request):
+            async def events():
+                yield ServerSentEvent("hello", event="greeting")
+                yield {"foo": "bar"}
+                yield "plain data"
+
+            return event_stream(events())
+        ```
+    """  # noqa: E501
+    headers = Header(headers or {})
+    headers.setdefault("cache-control", "no-cache")
+    headers.setdefault("x-accel-buffering", "no")
+
+    if not hasattr(generator, "__anext__"):
+        generator = generator.__aiter__()
+
+    async def _streaming_fn(response):
+        next_task: asyncio.Task | None = None
+        try:
+            while True:
+                next_task = asyncio.ensure_future(generator.__anext__())
+                if ping:
+                    while True:
+                        done, _ = await asyncio.wait(
+                            {next_task},
+                            timeout=ping,
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        if done:
+                            break
+                        await response.write(": ping\n\n")
+                try:
+                    item = await next_task
+                except StopAsyncIteration:
+                    next_task = None
+                    break
+                next_task = None
+                await response.write(_render_sse(item))
+        finally:
+            if next_task is not None and not next_task.done():
+                next_task.cancel()
+                with suppress(asyncio.CancelledError, StopAsyncIteration):
+                    await next_task
+            aclose = getattr(generator, "aclose", None)
+            if aclose is not None:
+                await aclose()
+
+    return ResponseStream(
+        streaming_fn=_streaming_fn,
+        status=status,
+        headers=headers,
+        content_type="text/event-stream; charset=utf-8",
     )
 
 

@@ -7,6 +7,8 @@ if TYPE_CHECKING:
     from sanic.request import Request
     from sanic.response import BaseHTTPResponse
 
+import re
+
 from asyncio import CancelledError, sleep
 from time import perf_counter
 
@@ -28,6 +30,12 @@ from sanic.touchup import TouchUpMeta
 
 
 HTTP_CONTINUE = b"HTTP/1.1 100 Continue\r\n\r\n"
+
+# RFC 9110 token (used for methods and header field names). Notably this
+# rejects whitespace, so a space between a header name and the colon
+# (RFC 9112 5.1: MUST be rejected) fails the match because the space
+# becomes part of the parsed name.
+_TOKEN_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 
 
 class Http(Stream, metaclass=TouchUpMeta):
@@ -215,11 +223,22 @@ class Http(Stream, metaclass=TouchUpMeta):
             else:
                 raise Exception  # Raise a Bad Request on try-except
 
+            if not _TOKEN_RE.match(method):
+                raise ValueError("Invalid method")
+
             self.head_only = method.upper() == "HEAD"
             request_body = False
             headers = []
 
             for name, value in (h.split(":", 1) for h in split_headers):
+                if not _TOKEN_RE.match(name):
+                    # Also rejects obs-fold and whitespace before the colon
+                    raise ValueError("Invalid header name")
+
+                if "\r" in value or "\n" in value:
+                    # Bare CR/LF survive the \r\n\r\n headers split
+                    raise ValueError("Invalid header value")
+
                 name, value = h = name.lower(), value.lstrip()
 
                 if name in ("content-length", "transfer-encoding"):
@@ -629,6 +648,10 @@ class Http(Stream, metaclass=TouchUpMeta):
 
     @staticmethod
     def _safe_int(value: str, base: int = 10) -> int:
+        # int() tolerates surrounding whitespace; reject it explicitly so
+        # that e.g. `Content-Length: 5 ` (trailing space) is a 400.
+        if value != value.strip():
+            raise ValueError
         if "-" in value or "+" in value or "_" in value:
             raise ValueError
         return int(value, base)

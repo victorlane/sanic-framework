@@ -26,5 +26,9 @@ ListenerType = (
     Callable[[Sanic], Coroutine[Any, Any, None] | None]
     | Callable[[Sanic, AbstractEventLoop], Coroutine[Any, Any, None] | None]
 )
-RouteHandler = Callable[..., Awaitable[HTTPResponse | None]]
+# Route handlers may be sync or async, and may return a response object or
+# ``None`` (e.g. when responding early via ``request.respond()``).
+RouteHandler = Callable[
+    ..., HTTPResponse | None | Awaitable[HTTPResponse | None]
+]
 SignalHandler = Callable[..., Coroutine[Any, Any, None]]

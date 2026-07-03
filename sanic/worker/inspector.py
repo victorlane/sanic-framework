@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime
+from hmac import compare_digest
 from inspect import isawaitable, ismethod
 from multiprocessing.connection import Connection
 from os import environ
@@ -82,7 +83,13 @@ class Inspector:
         environ["SANIC_IGNORE_PRODUCTION_WARNING"] = "true"
 
     def _authentication(self, request: Request) -> None:
-        if request.token != self.api_key:
+        token = request.token or ""
+        # Header values are decoded with errors="surrogateescape", so encode
+        # the same way to avoid UnicodeEncodeError on non-UTF-8 tokens.
+        if not compare_digest(
+            token.encode(errors="surrogateescape"),
+            self.api_key.encode(errors="surrogateescape"),
+        ):
             raise Unauthorized("Bad API key")
 
     async def _action(self, request: Request, action: str):
